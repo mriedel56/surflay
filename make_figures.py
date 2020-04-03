@@ -16,8 +16,37 @@ from custom_colors import color_dict
 import nibabel as nib
 import numpy as np
 import pandas as pd
+from PIL import Image, ImageDraw, ImageFont
 
-def slicer(plane, slices, img, workdir, prefix, thresh, cmap, dim, mni_template):
+
+def change_image_width(workdir, prefix, plane, i):
+    img = Image.open(op.join(workdir, '{prefix}_{plane}_{cut}.png'.format(prefix=prefix, plane=plane, cut=i)))
+    img_bk = Image.open(op.join(workdir, '{prefix}_{plane}_{cut}_bk.png'.format(prefix=prefix, plane=plane, cut=i)))
+    imageComponents = img_bk.split()
+    rgbImage = Image.new("RGB", img_bk.size, (0,0,0))
+    rgbImage.paste(img_bk, mask=imageComponents[3])
+    imageBox = rgbImage.getbbox()
+    cropped=img.crop(imageBox)
+    cropped.save(op.join(workdir, '{prefix}_{plane}_{cut}.png'.format(prefix=prefix, plane=plane, cut=i)))
+
+    img = Image.open(op.join(workdir, '{prefix}_{plane}_{cut}.png'.format(prefix=prefix, plane=plane, cut=i)))
+
+    wpercent = (480/float(img.size[0]))
+    hsize = int((float(img.size[1])*float(wpercent)))
+    img = img.resize((480,hsize), Image.ANTIALIAS)
+    img.save(op.join(workdir, '{prefix}_vol_{plane}_{cut}.png'.format(prefix=prefix, plane=plane, cut=i)))
+
+
+def make_label_image(workdir, plane, dir, i):
+    # create a text file with the slice annotation
+    img = Image.new('RGB', (480, 40), color = (255, 255, 255))
+    fnt = ImageFont.truetype('/Library/Fonts/Arial.ttf', 25)
+    d = ImageDraw.Draw(img)
+    d.text((220,10), '{0} = {1}'.format(dir, i), font=fnt, fill=(0, 0, 0))
+    img.save(op.join(workdir, '{plane}_label_{cut}.png'.format(plane=plane, cut=i)))
+
+
+def slicer(plane, slices, img, workdir, prefix, thresh, cmap, dim):
     if plane == "sag":
         dir="x"
     elif plane == "cor":
@@ -26,22 +55,37 @@ def slicer(plane, slices, img, workdir, prefix, thresh, cmap, dim, mni_template)
         dir="z"
 
     for i in slices:
-        plotting.plot_stat_map(img, output_file=op.join(workdir, '{prefix}_{plane}_{cut}.png'.format(prefix=prefix, plane=plane, cut=i)), threshold=thresh, draw_cross=False,  annotate=False, colorbar=False, cmap=cmap, display_mode=dir, cut_coords=[int(i)], dim=dim, black_bg=False, bg_img=mni_template)
-        cmd = 'convert {img_name} -trim +repage -geometry 480x {img_name}'.format(img_name = op.join(workdir, '{prefix}_{plane}_{cut}.png'.format(prefix=prefix, plane=plane, cut=i)))
-        run(cmd)
-        with open(op.join(workdir, '{plane}_label_{cut}.txt'.format(plane=plane, cut=i)), 'w') as fo:
-            fo.write('{dir} = {cut}'.format(dir=dir, cut=i))
-        cmd = 'convert -size 3840x480 -gravity Center -fill black -strokewidth 6 -font /Library/Fonts/Arial\ Unicode.ttf -density 300 -pointsize 68 caption:@{text_file} {label_image}'.format(text_file=op.join(workdir, '{plane}_label_{cut}.txt'.format(plane=plane, cut=i)), label_image=op.join(workdir, '{plane}_label_{cut}.png'.format(plane=plane, cut=i)))
-        run(cmd)
-        cmd = 'convert {label_image} -resize 12.5% {label_image}'.format(label_image = op.join(workdir, '{plane}_label_{cut}.png'.format(plane=plane, cut=i)))
-        run(cmd)
-        cmd = 'convert {label_image} +repage -crop 480x40+0+10 {label_image}'.format(label_image = op.join(workdir, '{plane}_label_{cut}.png'.format(plane=plane, cut=i)))
-        run(cmd)
-    label_imgs = glob(op.join(workdir, '{plane}_label_*.png'.format(plane=plane)))
-    label_imgs_list = " "
-    label_imgs_list = label_imgs_list.join(label_imgs)
-    cmd = 'convert {label_imgs_list} +append {label_img_final}'.format(label_imgs_list=label_imgs_list, label_img_final = op.join(workdir, '{plane}_label.png'.format(plane=plane)))
-    run(cmd)
+        plotting.plot_stat_map(
+            img,
+            output_file=op.join(workdir, '{prefix}_{plane}_{cut}.png'.format(prefix=prefix, plane=plane, cut=i)),
+            threshold=thresh,
+            draw_cross=False,
+            annotate=False,
+            colorbar=False,
+            cmap=cmap,
+            display_mode=dir,
+            cut_coords=[int(i)],
+            dim=dim,
+            black_bg=False)
+
+        plotting.plot_stat_map(
+            img,
+            output_file=op.join(workdir, '{prefix}_{plane}_{cut}_bk.png'.format(prefix=prefix, plane=plane, cut=i)),
+            threshold=thresh,
+            draw_cross=False,
+            annotate=False,
+            colorbar=False,
+            cmap=cmap,
+            display_mode=dir,
+            cut_coords=[int(i)],
+            dim=dim,
+            black_bg=True)
+
+        # cropping, resizing image
+        change_image_width(workdir, prefix, plane, i)
+
+        make_label_image(workdir, plane, dir, i)
+
 
 def run(command, env={}):
     merged_env = os.environ
@@ -75,8 +119,6 @@ def get_parser():
                         help='enter y-coordinates for axial slices; should be MNI152-space y-locations')
     parser.add_argument('-z', required=False, dest='ax', nargs='*',
                         help='enter z-coordinates for axial slices; should be MNI152-space z-locations')
-    parser.add_argument('--template', required=False, dest='template',
-                        help='Full path to template')
     parser.add_argument('-a', required=False, dest='autocoord', default=None,
                         help='Will automatically select slices based on (1) peak coordinates, (2) sub-peaks, with axial slices receiving preferential treatment.')
     parser.add_argument('--prefix', required=False, dest='prefix',
@@ -109,7 +151,6 @@ def main(argv=None):
     if op.isdir(workdir):
         shutil.rmtree(workdir)
     os.makedirs(workdir)
-
     if args.prefix is None:
         prefix=op.basename(args.filename).split('.')[0]
     else:
@@ -136,7 +177,9 @@ def main(argv=None):
         else:
             opacity=args.opacity
 
+
     colormaps=['Accent', 'Accent_r', 'Blues', 'Blues_r', 'BrBG', 'BrBG_r', 'BuGn', 'BuGn_r', 'BuPu', 'BuPu_r', 'CMRmap', 'CMRmap_r', 'Dark2', 'Dark2_r', 'GnBu', 'GnBu_r', 'Greens', 'Greens_r', 'Greys', 'Greys_r', 'OrRd', 'OrRd_r', 'Oranges', 'Oranges_r', 'PRGn', 'PRGn_r', 'Paired', 'Paired_r', 'Pastel1', 'Pastel1_r', 'Pastel2', 'Pastel2_r', 'PiYG', 'PiYG_r', 'PuBu', 'PuBuGn', 'PuBuGn_r', 'PuBu_r', 'PuOr', 'PuOr_r', 'PuRd', 'PuRd_r', 'Purples', 'Purples_r', 'RdBu', 'RdBu_r', 'RdGy', 'RdGy_r', 'RdPu', 'RdPu_r', 'RdYlBu', 'RdYlBu_r', 'RdYlGn', 'RdYlGn_r', 'Reds', 'Reds_r', 'Set1', 'Set1_r', 'Set2', 'Set2_r', 'Set3', 'Set3_r', 'Spectral', 'Spectral_r', 'Wistia', 'Wistia_r', 'YlGn', 'YlGnBu', 'YlGnBu_r', 'YlGn_r', 'YlOrBr', 'YlOrBr_r', 'YlOrRd', 'YlOrRd_r', 'afmhot', 'afmhot_r', 'autumn', 'autumn_r', 'binary', 'binary_r', 'black_blue', 'black_blue_r', 'black_green', 'black_green_r', 'black_pink', 'black_pink_r', 'black_purple', 'black_purple_r', 'black_red', 'black_red_r', 'blue_orange', 'blue_orange_r', 'blue_red', 'blue_red_r', 'blue_transparent', 'blue_transparent_full_alpha_range', 'bone', 'bone_r', 'brg', 'brg_r', 'brown_blue', 'brown_blue_r', 'brown_cyan', 'brown_cyan_r', 'bwr', 'bwr_r', 'cividis', 'cividis_r', 'cold_hot', 'cold_hot_r', 'cold_white_hot', 'cold_white_hot_r', 'cool', 'cool_r', 'coolwarm', 'coolwarm_r', 'copper', 'copper_r', 'cubehelix', 'cubehelix_r', 'cyan_copper', 'cyan_copper_r', 'cyan_orange', 'cyan_orange_r', 'flag', 'flag_r', 'gist_earth', 'gist_earth_r', 'gist_gray', 'gist_gray_r', 'gist_heat', 'gist_heat_r', 'gist_ncar', 'gist_ncar_r', 'gist_rainbow', 'gist_rainbow_r', 'gist_stern', 'gist_stern_r', 'gist_yarg', 'gist_yarg_r', 'gnuplot', 'gnuplot2', 'gnuplot2_r', 'gnuplot_r', 'gray', 'gray_r', 'green_transparent', 'green_transparent_full_alpha_range', 'hot', 'hot_black_bone', 'hot_black_bone_r', 'hot_r', 'hot_white_bone', 'hot_white_bone_r', 'hsv', 'hsv_r', 'inferno', 'inferno_r', 'jet', 'jet_r', 'magma', 'magma_r', 'nipy_spectral', 'nipy_spectral_r', 'ocean', 'ocean_hot', 'ocean_hot_r', 'ocean_r', 'pink', 'pink_r', 'plasma', 'plasma_r', 'prism', 'prism_r', 'purple_blue', 'purple_blue_r', 'purple_green', 'purple_green_r', 'rainbow', 'rainbow_r', 'red_transparent', 'red_transparent_full_alpha_range', 'roy_big_bl', 'seismic', 'seismic_r', 'spring', 'spring_r', 'summer', 'summer_r', 'tab10', 'tab10_r', 'tab20', 'tab20_r', 'tab20b', 'tab20b_r', 'tab20c', 'tab20c_r', 'terrain', 'terrain_r', 'twilight', 'twilight_r', 'twilight_shifted', 'twilight_shifted_r', 'videen_style', 'viridis', 'viridis_r', 'winter', 'winter_r']
+
 
     if args.cmap is not None:
         if args.cmap in colormaps:
@@ -146,11 +189,6 @@ def main(argv=None):
         else:
             raise ValueError('Argument "colormap" is not a valid colormap.')
 
-    if args.template is None:
-        # need to include a fetch command here
-        mni_template = datasets.load_mni152_template()
-    else:
-        mni_template=args.template
 
     fsaverage = datasets.fetch_surf_fsaverage()
     fs_pial_lh=fsaverage['pial_left']
@@ -179,33 +217,61 @@ def main(argv=None):
 
     if args.sag is not None:
         sag=[args.sag][0]
-        slicer('sag', sag, newimg, workdir, prefix, thresh, cmap, dim, mni_template)
+        slicer('sag', sag, newimg, workdir, prefix, thresh, cmap, dim)
 
     if args.cor is not None:
         cor=[args.cor][0]
-        slicer('cor', cor, newimg, workdir, prefix, thresh, cmap, dim, mni_template)
+        slicer('cor', cor, newimg, workdir, prefix, thresh, cmap, dim)
 
     if args.ax is not None:
         ax=[args.ax][0]
-        slicer('ax', ax, newimg, workdir, prefix, thresh, cmap, dim, mni_template)
+        slicer('ax', ax, newimg, workdir, prefix, thresh, cmap, dim)
 
-    vol_figs = glob(op.join(workdir, '{prefix}_*.png'.format(prefix=prefix)))
+    vol_figs = sorted(glob(op.join(workdir, '{prefix}_vol*.png'.format(prefix=prefix))), reverse=True)
     if vol_figs:
-        vol_figs_list=" "
-        vol_figs_list= vol_figs_list.join(vol_figs)
-        cmd='convert {vol_figs_list} -gravity center -background white +append {outdir}/{prefix}_volfigs.png'.format(vol_figs_list=vol_figs_list, outdir=workdir, prefix=prefix)
-        run(cmd)
+        newimg_w = 0
+        newimg_h = []
+        for vol_fig in vol_figs:
+            img = Image.open(vol_fig)
+            newimg_w = newimg_w + img.width
+            newimg_h.append(img.height)
 
-    label_figs = glob(op.join(workdir, '*_label.png'.format(prefix=prefix)))
+        dst = Image.new('RGB', (newimg_w, max(newimg_h)), 'white')
+        newimg_w = 0
+        for vol_fig in vol_figs:
+            img = Image.open(vol_fig)
+            dst.paste(img, (newimg_w, (dst.height - img.height) // 2))
+            newimg_w = newimg_w + img.width
+
+        dst.save(op.join(workdir, '{prefix}_volfigs.png'.format(prefix=prefix)))
+
+    label_figs = sorted(glob(op.join(workdir, '*label*.png'.format(prefix=prefix))), reverse = True)
     if label_figs:
-        label_figs_list=" "
-        label_figs_list= label_figs_list.join(label_figs)
-        cmd='convert {label_figs_list} -gravity center -background white +append {outdir}/label_figs.png'.format(label_figs_list=label_figs_list, outdir=workdir)
-        run(cmd)
+        newimg_w = 0
+        newimg_h = []
+        for label_fig in label_figs:
+            img = Image.open(label_fig)
+            newimg_w = newimg_w + img.width
+            newimg_h.append(img.height)
+
+        dst = Image.new('RGB', (newimg_w, max(newimg_h)), 'white')
+        newimg_w = 0
+        for label_fig in label_figs:
+            img = Image.open(label_fig)
+            dst.paste(img, (newimg_w, (dst.height - img.height) // 2))
+            newimg_w = newimg_w + img.width
+
+        dst.save(op.join(workdir, '{prefix}_labelfigs.png'.format(prefix=prefix)))
 
     if vol_figs:
-        cmd = 'convert {vol_figs} {label_figs} -background white -append {vol_figs}'.format(vol_figs = op.join(workdir, '{prefix}_volfigs.png'.format(prefix=prefix)), label_figs = op.join(workdir, 'label_figs.png'))
-        run(cmd)
+        volimg = Image.open(op.join(workdir, '{prefix}_volfigs.png'.format(prefix=prefix)))
+        labelimg = Image.open(op.join(workdir, '{prefix}_labelfigs.png'.format(prefix=prefix)))
+
+        dst = Image.new('RGB', (volimg.width, volimg.height + labelimg.height), 'white')
+        dst.paste(volimg, (0,0))
+        dst.paste(labelimg, (0, volimg.height))
+        dst.save(op.join(workdir, '{prefix}_slices.png'.format(prefix=prefix)))
+
 
     lh_surf = surface.vol_to_surf(newimg, fs_pial_lh, interpolation='nearest')
     rh_surf = surface.vol_to_surf(newimg, fs_pial_rh, interpolation='nearest')
@@ -217,26 +283,63 @@ def main(argv=None):
 
     for view in ['medial', 'lateral']:
         plotting.plot_surf_stat_map(fs_pial_lh, lh_surf, hemi='left', cmap=cmap, bg_map=fs_sulc_lh, bg_on_data = True, alpha= opacity, colorbar=False, threshold = thresh, view=view, output_file=op.join(workdir, '{prefix}_surf_left_{view}.png'.format(prefix=prefix, view=view)))
-        cmd='convert {fname} -trim +repage -geometry x600 {fname}'.format(fname=op.join(workdir, '{prefix}_surf_left_{view}.png'.format(prefix=prefix, view=view)))
-        run(cmd)
-        if view == "lateral":
-            cbar=True
-        else:
-            cbar=False
-        plotting.plot_surf_stat_map(fs_pial_rh, rh_surf, hemi='right', cmap=cmap, bg_map=fs_sulc_rh, bg_on_data = True, alpha=opacity, colorbar=cbar, threshold = thresh, view=view, output_file=op.join(workdir, '{prefix}_surf_right_{view}.png'.format(prefix=prefix, view=view)))
-        cmd='convert {fname} -trim +repage -geometry x600 {fname}'.format(fname=op.join(workdir, '{prefix}_surf_right_{view}.png'.format(prefix=prefix, view=view)))
-        run(cmd)
 
-    cmd='convert {left_lateral} {left_medial} +append {left_surf}'.format(left_lateral=op.join(workdir, '{prefix}_surf_left_lateral.png'.format(prefix=prefix)), left_medial=op.join(workdir, '{prefix}_surf_left_medial.png'.format(prefix=prefix)), left_surf=op.join(workdir, '{prefix}_surf_left.png'.format(prefix=prefix)))
-    run(cmd)
-    cmd='convert {right_medial} {right_lateral} +append {right_surf}'.format(right_lateral=op.join(workdir, '{prefix}_surf_right_lateral.png'.format(prefix=prefix)), right_medial=op.join(workdir, '{prefix}_surf_right_medial.png'.format(prefix=prefix)), right_surf=op.join(workdir, '{prefix}_surf_right.png'.format(prefix=prefix)))
-    run(cmd)
-    if op.exists(op.join(workdir, '{prefix}_volfigs.png'.format(prefix=prefix))):
-        vol_figs_arg = op.join(workdir, '{prefix}_volfigs.png'.format(prefix=prefix))
+        img = Image.open(op.join(workdir, '{prefix}_surf_left_{view}.png'.format(prefix=prefix, view=view)))
+        if view == "lateral":
+            cropped = img.crop([135, 70, 545, 400])
+        else:
+            cropped = img.crop([105, 70, 530, 400])
+        cropped.save(op.join(workdir, '{prefix}_surf_left_{view}.png'.format(prefix=prefix, view=view)))
+
+        plotting.plot_surf_stat_map(fs_pial_rh, rh_surf, hemi='right', cmap=cmap, bg_map=fs_sulc_rh, bg_on_data = True, alpha=opacity, colorbar=False, threshold = thresh, view=view, output_file=op.join(workdir, '{prefix}_surf_right_{view}.png'.format(prefix=prefix, view=view)))
+
+        img = Image.open(op.join(workdir, '{prefix}_surf_right_{view}.png'.format(prefix=prefix, view=view)))
+        if view == 'lateral':
+            cropped = img.crop([105, 70, 530, 400])
+        else:
+            cropped = img.crop([135, 70, 545, 400])
+        cropped.save(op.join(workdir, '{prefix}_surf_right_{view}.png'.format(prefix=prefix, view=view)))
+
+
+    plotting.plot_surf_stat_map(fs_pial_rh, rh_surf, hemi='right', cmap=cmap, bg_map=fs_sulc_rh, bg_on_data = True, alpha=opacity, colorbar=True, threshold = thresh, view=view, output_file=op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
+
+    img = Image.open(op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
+    cropped = img.crop([565, 70, img.width, 400])
+    cropped.save(op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
+
+    if vol_figs:
+        img = Image.open(op.join(workdir, '{prefix}_slices.png'.format(prefix=prefix)))
+        hpercent = (360/float(img.size[1]))
+        wsize = int((float(img.size[0])*float(hpercent)))
+        img = img.resize((wsize, 360), Image.ANTIALIAS)
+        img.save(op.join(workdir, '{prefix}_slices.png'.format(prefix=prefix)))
+
+    left_lat = Image.open(op.join(workdir, '{prefix}_surf_left_lateral.png'.format(prefix=prefix)))
+    right_lat = Image.open(op.join(workdir, '{prefix}_surf_right_lateral.png'.format(prefix=prefix)))
+    left_med = Image.open(op.join(workdir, '{prefix}_surf_left_medial.png'.format(prefix=prefix)))
+    right_med = Image.open(op.join(workdir, '{prefix}_surf_right_medial.png'.format(prefix=prefix)))
+    colorbar = Image.open(op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
+    newwidth = left_lat.width + right_lat.width + left_med.width + right_med.width + colorbar.width
+    newheight = 330
+    if vol_figs:
+        sliceimg = Image.open(op.join(workdir, '{prefix}_slices.png'.format(prefix=prefix)))
+        newheight = sliceimg.height
+        newwidth = newwidth + sliceimg.width
+
+    finalimg = Image.new('RGB', (newwidth, newheight), 'white')
+    finalimg.paste(left_lat, (0,0))
+    finalimg.paste(left_med, (left_lat.width, 0))
+    if vol_figs:
+        finalimg.paste(sliceimg, (left_lat.width + left_med.width, 0))
+        finalimg.paste(right_med, (left_lat.width + left_med.width + sliceimg.width, 0))
+        finalimg.paste(right_lat, (left_lat.width + left_med.width + sliceimg.width + right_med.width, 0))
+        finalimg.paste(colorbar, (left_lat.width + left_med.width + sliceimg.width + right_med.width + right_lat.width, 0))
     else:
-        vol_figs_arg = ''
-    cmd='convert {left_surf} {vol_figs} {right_surf} -background white +append {outfname}.png'.format(left_surf=op.join(workdir, '{prefix}_surf_left.png'.format(prefix=prefix)), vol_figs=vol_figs_arg, right_surf=op.join(workdir, '{prefix}_surf_right.png'.format(prefix=prefix)), outfname=op.join(outdir, prefix))
-    run(cmd)
+        finalimg.paste(right_med, (left_lat.width + left_med.width, 0))
+        finalimg.paste(right_lat, (left_lat.width + left_med.width + right_med.width, 0))
+        finalimg.paste(colorbar, (left_lat.width + left_med.width + right_med.width + right_lat.width, 0))
+
+    finalimg.save(op.join(outdir, '{prefix}.png'.format(prefix=prefix)))
 
     shutil.rmtree(workdir)
 
