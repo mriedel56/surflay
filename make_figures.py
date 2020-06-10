@@ -16,6 +16,7 @@ from custom_colors import color_dict
 import nibabel as nib
 import numpy as np
 import pandas as pd
+import warnings
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -87,26 +88,6 @@ def slicer(plane, slices, img, workdir, prefix, thresh, cmap, dim):
         make_label_image(workdir, plane, dir, i)
 
 
-def run(command, env={}):
-    merged_env = os.environ
-    merged_env.update(env)
-    process = subprocess.Popen(command, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, shell=True,
-                               env=merged_env)
-    while True:
-        line = process.stdout.readline()
-        #line = str(line).encode('utf-8')[:-1]
-        line=str(line, 'utf-8')[:-1]
-        print(line)
-        if line == '' and process.poll() is not None:
-            break
-
-    if process.returncode != 0:
-        raise Exception("Non zero return code: {0}\n"
-                        "{1}\n\n{2}".format(process.returncode, command,
-                                            process.stdout.read()))
-
-
 def get_parser():
     parser = argparse.ArgumentParser(description='This script will generate axials, surface medial and surface lateral view images with the specified overlay.')
     parser.add_argument('-f', '--filename', required=True, dest='filename',
@@ -137,6 +118,7 @@ def get_parser():
 
 
 def main(argv=None):
+
     args = get_parser().parse_args(argv)
 
     if not op.exists(args.filename):
@@ -300,12 +282,28 @@ def main(argv=None):
             cropped = img.crop([135, 70, 545, 400])
         cropped.save(op.join(workdir, '{prefix}_surf_right_{view}.png'.format(prefix=prefix, view=view)))
 
+    make_cbar = True
+    warnings.filterwarnings('error', 'invalid value encountered in true_divide')
+    while make_cbar:
+        for hemi in ['left', 'right']:
+            for view in ['medial', 'lateral']:
+                if hemi == 'right':
+                    pial = fs_pial_rh
+                    surf = rh_surf
+                    sulc=fs_sulc_rh
+                else:
+                    pial = fs_pial_lh
+                    surf = lh_surf
+                    sulc=fs_sulc_lh
 
-    plotting.plot_surf_stat_map(fs_pial_rh, rh_surf, hemi='right', cmap=cmap, bg_map=fs_sulc_rh, bg_on_data = True, alpha=opacity, colorbar=True, threshold = thresh, view=view, output_file=op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
-
-    img = Image.open(op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
-    cropped = img.crop([565, 70, img.width, 400])
-    cropped.save(op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
+                try:
+                    plotting.plot_surf_stat_map(pial, surf, hemi=hemi, cmap=cmap, bg_map=sulc, bg_on_data = True, alpha=opacity, colorbar=True, threshold = thresh, view=view, output_file=op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
+                    img = Image.open(op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
+                    cropped = img.crop([565, 70, img.width, 400])
+                    cropped.save(op.join(workdir, '{prefix}_colorbar.png'.format(prefix=prefix)))
+                    make_cbar = False
+                except:
+                    continue
 
     if vol_figs:
         img = Image.open(op.join(workdir, '{prefix}_slices.png'.format(prefix=prefix)))
