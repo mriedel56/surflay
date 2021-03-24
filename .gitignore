@@ -129,3 +129,4 @@ dmypy.json
 .pyre/
 
 make_figures_pace.py
+.gitignore
